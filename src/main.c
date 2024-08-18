@@ -15,14 +15,14 @@ int main(int argc, char* argv[]) {
 
         if(window == NULL) {
                 printf("Window could not be created! SDL_Error: %s\n",SDL_GetError());
-                SDL_Quit ();
+		SDL_Quit();
                 return 1;
         }
         renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
         if(renderer == NULL) {
                 printf("Renderer could not be created! SDL_Error: %s\n", SDL_GetError());
                 SDL_DestroyWindow(window);
-                SDL_Quit;
+                SDL_Quit();
                 return 1;
         }
 
