@@ -8,8 +8,52 @@
 #define CH 20
 #define ROWS WINDOW_HEIGHT / CH
 #define COLS WINDOW_WIDTH / CW
+#define SPEED 0.001
+
+typedef struct {
+    SDL_Window *window;
+    SDL_Renderer *renderer;
+    int running;
+} Context;
 
 typedef int BlockStack[ROWS][COLS];
+
+typedef struct {
+    int no;
+    Block current;
+    Block next;
+    BlockStack stack;
+    double difficulty;
+    double y;
+} Level;
+
+int init(Context *ctx) {
+    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+        printf("SDL could initialize! SDL_Error: %s\n", SDL_GetError());
+        return 0;
+    }
+
+    ctx->window = SDL_CreateWindow("My Window", SDL_WINDOWPOS_UNDEFINED,
+                                   SDL_WINDOWPOS_UNDEFINED, WINDOW_WIDTH,
+                                   WINDOW_HEIGHT, SDL_WINDOW_SHOWN);
+
+    if (ctx->window == NULL) {
+        printf("Window could not be created! SDL_Error: %s\n", SDL_GetError());
+        SDL_Quit();
+        return 0;
+    }
+    ctx->renderer =
+        SDL_CreateRenderer(ctx->window, -1, SDL_RENDERER_ACCELERATED);
+    if (ctx->renderer == NULL) {
+        printf("Renderer could not be created! SDL_Error: %s\n",
+               SDL_GetError());
+        SDL_DestroyWindow(ctx->window);
+        SDL_Quit();
+        return 0;
+    }
+    ctx->running = 1;
+    return 1;
+}
 
 void draw_block_stack(SDL_Renderer *renderer, BlockStack stack) {
     for (int j = 0; j < ROWS; j++) {
@@ -28,8 +72,35 @@ void draw_block(SDL_Renderer *renderer, Block *block) {
         for (int i = 0; i < 4; i++) {
             int cell = BLOCK_TYPES[block->type][block->rotation % 4][j][i];
             if (cell) {
-                SDL_Rect r = {block->x + i * CW, block->y + j * CH, CW, CH};
-                SDL_SetRenderDrawColor(renderer, 0xFF, 0x00, 0x00, 0xFF);
+                SDL_Rect r = {(block->x + i) * CW, (block->y + j) * CH, CW, CH};
+                switch (block->type) {
+                    case 'I':
+                        SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0xFF,
+                                               0xFF);
+                        printf("I");
+                        break;
+                    case 'O':
+                        SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0x00,
+                                               0xFF);
+                        break;
+                    case 'T':
+                        SDL_SetRenderDrawColor(renderer, 0xFF, 0x00, 0x00,
+                                               0xFF);
+                        break;
+                    case 'L':
+                        printf("L");
+                        SDL_SetRenderDrawColor(renderer, 0x80, 0x00, 0x80,
+                                               0xFF);
+                        break;
+                    case 'S':
+                        SDL_SetRenderDrawColor(renderer, 0xA5, 0x2A, 0x2A,
+                                               0xFF);
+                        break;
+                    case 'Z':
+                        SDL_SetRenderDrawColor(renderer, 0x80, 0x80, 0x80,
+                                               0xFF);
+                        break;
+                }
                 SDL_RenderFillRect(renderer, &r);
             }
         }
@@ -46,17 +117,14 @@ void draw_grid(SDL_Renderer *renderer) {
     }
 }
 
-int check_block(Block block, BlockStack stack) {
+int has_collision(Block block, BlockStack stack) {
+    int x = block.x;
+    int y = block.y + 1;
     int h = block_get_height(block.type, block.rotation);
-    if (block.y >= WINDOW_HEIGHT - h * CH) {
+    if (block.y >= ROWS - h) {
         return 1;
     }
-    return 0;
-}
 
-int has_collision(Block block, BlockStack stack) {
-    int x = block.x / CW;
-    int y = block.y / CH;
     for (int j = 0; j < 4; j++) {
         for (int i = 0; i < 4; i++) {
             int cell = BLOCK_TYPES[block.type][block.rotation % 4][j][i];
@@ -71,8 +139,8 @@ int has_collision(Block block, BlockStack stack) {
 }
 
 void fix_block(Block *block, BlockStack stack) {
-    int row = block->y / CH;
-    int col = block->x / CW;
+    int row = block->y;
+    int col = block->x;
     for (int j = 0; j < 4; j++) {
         for (int i = 0; i < 4; i++) {
             int cell = BLOCK_TYPES[block->type][block->rotation % 4][j][i];
@@ -85,108 +153,86 @@ void fix_block(Block *block, BlockStack stack) {
     block->y = 0;
 }
 
-int main(int argc, char *argv[]) {
-    SDL_Window *window = NULL;
-    SDL_Renderer *renderer = NULL;
-
-    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
-        printf("SDL could initialize! SDL_Error: %s\n", SDL_GetError());
-        return 1;
-    }
-
-    window = SDL_CreateWindow("My Window", SDL_WINDOWPOS_UNDEFINED,
-                              SDL_WINDOWPOS_UNDEFINED, WINDOW_WIDTH,
-                              WINDOW_HEIGHT, SDL_WINDOW_SHOWN);
-
-    if (window == NULL) {
-        printf("Window could not be created! SDL_Error: %s\n", SDL_GetError());
-        SDL_Quit();
-        return 1;
-    }
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-    if (renderer == NULL) {
-        printf("Renderer could not be created! SDL_Error: %s\n",
-               SDL_GetError());
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
-    }
-
-    int running = 1;
+void update(Context *ctx, Level *level) {
     SDL_Event event;
-    Block current = {0, 0, 0, 0};
-    BlockStack stack;
+    while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_QUIT) {
+            ctx->running = 0;
+        }
+        if (event.type == SDL_KEYDOWN) {
+            switch (event.key.keysym.sym) {
+                case SDLK_q:
+                    ctx->running = 0;
+                    break;
+                case SDLK_SPACE:
+                    level->current.rotation++;
+                    int bw = block_get_width(level->current.type,
+                                             level->current.rotation);
+                    if (level->current.x > COLS - bw) {
+                        level->current.x = COLS - bw;
+                    }
+                    break;
+                case SDLK_LEFT:
+                    if (level->current.x > 0) {
+                        level->current.x -= 1;
+                    }
+                    break;
+                case SDLK_RIGHT:
+                    if (level->current.x <
+                        COLS - block_get_width(level->current.type,
+                                               level->current.rotation)) {
+                        level->current.x += 1;
+                    }
+                    break;
+            }
+        }
+    }
+    level->current.y = (int)level->y;
+    level->y += level->difficulty * SPEED;
+    if (has_collision(level->current, level->stack)) {
+        level->y = 0;
+        fix_block(&level->current, level->stack);
+    }
+}
+
+void render(Context *ctx, Level *level) {
+    SDL_SetRenderDrawColor(ctx->renderer, 255, 255, 255, 255);
+    SDL_RenderClear(ctx->renderer);
+    draw_block_stack(ctx->renderer, level->stack);
+    draw_grid(ctx->renderer);
+    draw_block(ctx->renderer, &level->current);
+    SDL_RenderPresent(ctx->renderer);
+}
+
+void cleanup(Context *ctx) {
+    SDL_DestroyRenderer(ctx->renderer);
+    SDL_DestroyWindow(ctx->window);
+    SDL_Quit();
+}
+
+int main(int argc, char *argv[]) {
+    Context ctx;
+    if (!init(&ctx)) {
+        return 1;
+    }
+    Level level;
+    level.current.type = 0;
+    level.current.rotation = 0;
+    level.current.x = 0;
+    level.current.y = 0;
     for (int j = 0; j < ROWS; j++) {
         for (int i = 0; i < COLS; i++) {
-            stack[j][i] = 0;
+            level.stack[j][i] = 0;
         }
     }
 
-    float y = 0;
-    while (running) {
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_QUIT) {
-                running = 0;
-            }
-            if (event.type == SDL_KEYDOWN) {
-                switch (event.key.keysym.sym) {
-                    case SDLK_q:
-                        running = 0;
-                        break;
-                    case SDLK_SPACE:
-                        current.rotation++;
-                        int bw =
-                            block_get_width(current.type, current.rotation);
-                        if (current.x > WINDOW_WIDTH - bw * CW) {
-                            current.x = WINDOW_WIDTH - bw * CW;
-                        }
-                        break;
-
-                    case SDLK_LEFT:
-                        if (current.x > 0) {
-                            current.x -= CW;
-                        }
-                        break;
-                    case SDLK_RIGHT:
-                        if (current.x <
-                            WINDOW_WIDTH - block_get_width(current.type,
-                                                           current.rotation) *
-                                               CW) {
-                            current.x += CW;
-                        }
-                        // printf("%d\n",
-                        //  block_get_width(current.type,
-                        //  current.rotation));
-
-                        break;
-                }
-            }
-        }
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-        SDL_RenderClear(renderer);
-
-        draw_block_stack(renderer, stack);
-
-        draw_grid(renderer);
-
-        draw_block(renderer, &current);
-        current.y = (int)y;
-        y += 0.02;
-        if (check_block(current, stack)) {
-            y = 0;
-            fix_block(&current, stack);
-        } else if (has_collision(current, stack)) {
-            y = 0;
-            current.y -= CH;
-            fix_block(&current, stack);
-        }
-
-        SDL_RenderPresent(renderer);
+    level.y = 0;
+    level.difficulty = 1;
+    while (ctx.running) {
+        update(&ctx, &level);
+        render(&ctx, &level);
     }
-
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
+    cleanup(&ctx);
 
     return 0;
 }
